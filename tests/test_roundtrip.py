@@ -3,20 +3,23 @@
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from crouton_sync.crouton_db import DEFAULT_DB_PATH, read_all_recipes
 from crouton_sync.crumb import read_crumb, recipe_to_crumb_dict, write_crumb
 from crouton_sync.markdown import markdown_to_recipe, recipe_to_markdown
 
+_skip_no_db = pytest.mark.skipif(
+    not DEFAULT_DB_PATH.exists(), reason="Crouton database not available"
+)
 
+
+@_skip_no_db
 class TestSQLiteToMarkdownRoundtrip:
     """Test reading from SQLite, exporting to Markdown, and re-importing."""
 
     def test_roundtrip_preserves_fields(self):
-        if not DEFAULT_DB_PATH.exists():
-            return
-
         recipes = read_all_recipes()
-        # Test with first 5 recipes
         for recipe in recipes[:5]:
             md = recipe_to_markdown(recipe, embed_images=False)
             parsed = markdown_to_recipe(md)
@@ -27,25 +30,22 @@ class TestSQLiteToMarkdownRoundtrip:
             assert parsed.source_name == recipe.source_name
             assert parsed.source_url == recipe.source_url
 
-            # Ingredient count should match
             assert len(parsed.ingredients) == len(recipe.ingredients), (
                 f"Ingredient count mismatch for {recipe.name}: "
                 f"{len(parsed.ingredients)} vs {len(recipe.ingredients)}"
             )
 
-            # Step count should match
             assert len(parsed.steps) == len(recipe.steps), (
-                f"Step count mismatch for {recipe.name}: {len(parsed.steps)} vs {len(recipe.steps)}"
+                f"Step count mismatch for {recipe.name}: "
+                f"{len(parsed.steps)} vs {len(recipe.steps)}"
             )
 
 
+@_skip_no_db
 class TestSQLiteToCrumbComparison:
     """Compare .crumb output structure against expected format."""
 
     def test_crumb_dict_has_required_fields(self):
-        if not DEFAULT_DB_PATH.exists():
-            return
-
         recipes = read_all_recipes()
         for recipe in recipes[:5]:
             d = recipe_to_crumb_dict(recipe)
@@ -59,16 +59,14 @@ class TestSQLiteToCrumbComparison:
             assert d["uuid"] == recipe.uuid
 
 
+@_skip_no_db
 class TestFullPipeline:
     """Test the complete pipeline: SQLite → Markdown → .crumb file."""
 
     def test_full_pipeline(self):
-        if not DEFAULT_DB_PATH.exists():
-            return
-
         recipes = read_all_recipes()
         if not recipes:
-            return
+            pytest.skip("No recipes in database")
 
         recipe = recipes[0]
 

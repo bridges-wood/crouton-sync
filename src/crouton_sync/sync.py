@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -41,7 +42,8 @@ def compare(
             recipe = markdown_to_recipe(text)
             if recipe.uuid:
                 md_uuids[recipe.uuid] = recipe.name
-        except Exception:
+        except Exception as e:
+            print(f"  Warning: skipping {md_file.name}: {e}", file=sys.stderr)
             continue
 
     # Compare

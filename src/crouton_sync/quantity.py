@@ -163,7 +163,7 @@ def parse_amount(text: str) -> float | None:
             try:
                 num, den = part.split("/", 1)
                 total += float(num) / float(den)
-            except ValueError, ZeroDivisionError:
+            except (ValueError, ZeroDivisionError):
                 return None
         else:
             try:

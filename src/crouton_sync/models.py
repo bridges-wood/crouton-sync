@@ -13,7 +13,7 @@ class Ingredient:
     amount: float | None = None
     secondary_amount: float | None = None
     quantity_type: str | None = None
-    order: float = 0
+    order: float = 0  # Float to match Crouton's ZCDMEASUREDINGREDIENT.ZORDER schema
     uuid: str = ""
 
 

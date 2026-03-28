@@ -6,6 +6,8 @@ import base64
 import re
 from pathlib import Path
 
+import yaml
+
 from crouton_sync.models import Ingredient, Recipe, Step
 from crouton_sync.quantity import format_amount, parse_amount, to_crouton_type, to_display
 
@@ -19,36 +21,36 @@ def recipe_to_markdown(
     lines: list[str] = []
 
     # YAML frontmatter
-    lines.append("---")
-    lines.append(f"crouton_uuid: {recipe.uuid}")
+    meta: dict = {}
+    meta["crouton_uuid"] = recipe.uuid
     if recipe.source_name:
-        lines.append(f"source_name: {_yaml_str(recipe.source_name)}")
+        meta["source_name"] = recipe.source_name
     if recipe.source_url:
-        lines.append(f"source_url: {recipe.source_url}")
+        meta["source_url"] = recipe.source_url
     if recipe.prep_time is not None:
-        lines.append(f"prep_time: {_format_time(recipe.prep_time)}")
+        meta["prep_time"] = _format_time(recipe.prep_time)
     if recipe.cook_time is not None:
-        lines.append(f"cook_time: {_format_time(recipe.cook_time)}")
+        meta["cook_time"] = _format_time(recipe.cook_time)
     if recipe.servings is not None:
-        lines.append(f"servings: {recipe.servings}")
+        meta["servings"] = recipe.servings
     if recipe.default_scale != 1.0:
-        lines.append(f"default_scale: {recipe.default_scale}")
+        meta["default_scale"] = recipe.default_scale
     if recipe.rating:
-        lines.append(f"rating: {recipe.rating}")
+        meta["rating"] = recipe.rating
     if recipe.difficulty:
-        lines.append(f"difficulty: {_yaml_str(recipe.difficulty)}")
+        meta["difficulty"] = recipe.difficulty
     if recipe.tags:
-        lines.append("tags:")
-        for tag in recipe.tags:
-            lines.append(f"  - {_yaml_str(tag)}")
+        meta["tags"] = recipe.tags
     if recipe.folders:
-        lines.append("folders:")
-        for folder in recipe.folders:
-            lines.append(f"  - {_yaml_str(folder)}")
+        meta["folders"] = recipe.folders
     if recipe.nutritional_info:
-        lines.append("nutritional_info: |")
-        for info_line in recipe.nutritional_info.strip().split("\n"):
-            lines.append(f"  {info_line.strip()}")
+        meta["nutritional_info"] = recipe.nutritional_info.strip() + "\n"
+
+    frontmatter_str = yaml.dump(
+        meta, default_flow_style=False, allow_unicode=True, sort_keys=False, width=200
+    ).rstrip("\n")
+    lines.append("---")
+    lines.append(frontmatter_str)
     lines.append("---")
     lines.append("")
 
@@ -258,62 +260,14 @@ def _split_frontmatter(text: str) -> tuple[str, str]:
 
 
 def _parse_yaml_frontmatter(text: str) -> dict:
-    """Minimal YAML parser for frontmatter (no external deps)."""
-    result: dict = {}
+    """Parse YAML frontmatter using PyYAML."""
     if not text:
-        return result
-
-    current_key = ""
-    current_list: list | None = None
-    multiline_value = ""
-    is_multiline = False
-
-    for line in text.split("\n"):
-        # List item
-        if line.startswith("  - ") and current_key:
-            if current_list is None:
-                current_list = []
-                result[current_key] = current_list
-            current_list.append(line[4:].strip())
-            continue
-
-        # Multiline continuation
-        if is_multiline and (line.startswith("  ") or line == ""):
-            multiline_value += line[2:] + "\n" if line.startswith("  ") else "\n"
-            continue
-        elif is_multiline:
-            result[current_key] = multiline_value.rstrip("\n")
-            is_multiline = False
-
-        # Key: value pair
-        if ":" in line and not line.startswith(" "):
-            if current_list is not None:
-                current_list = None
-
-            colon_idx = line.index(":")
-            current_key = line[:colon_idx].strip()
-            value = line[colon_idx + 1 :].strip()
-
-            if value == "|":
-                is_multiline = True
-                multiline_value = ""
-            elif value == "" or value == "[]":
-                result[current_key] = [] if value == "[]" else ""
-            else:
-                result[current_key] = value
-
-    # Flush final multiline
-    if is_multiline:
-        result[current_key] = multiline_value.rstrip("\n")
-
-    return result
-
-
-def _yaml_str(value: str) -> str:
-    """Escape a string for YAML if needed."""
-    if any(c in value for c in ":#{}[]|>&*!%@`"):
-        return f'"{value}"'
-    return value
+        return {}
+    try:
+        result = yaml.safe_load(text)
+        return result if isinstance(result, dict) else {}
+    except yaml.YAMLError:
+        return {}
 
 
 def _format_time(minutes: float) -> int | float:
@@ -326,7 +280,7 @@ def _parse_float(value) -> float | None:
         return None
     try:
         return float(value)
-    except ValueError, TypeError:
+    except (ValueError, TypeError):
         return None
 
 
@@ -335,5 +289,5 @@ def _parse_int(value) -> int | None:
         return None
     try:
         return int(float(value))
-    except ValueError, TypeError:
+    except (ValueError, TypeError):
         return None

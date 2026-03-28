@@ -68,6 +68,11 @@ def main(argv: list[str] | None = None) -> int:
         dest="open_in_app",
         help="Open generated .crumb files in Crouton",
     )
+    import_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be imported without making changes",
+    )
 
     # ── verify ──
     verify_parser = subparsers.add_parser(
@@ -95,6 +100,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     sync_parser.add_argument(
         "--no-images", action="store_true", help="Skip embedding images when exporting"
+    )
+    sync_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be exported without making changes",
     )
 
     args = parser.parse_args(argv)
@@ -155,7 +165,10 @@ def cmd_import(args: argparse.Namespace) -> int:
 
 def _import_via_crumb(args: argparse.Namespace, md_files: list[Path]) -> int:
     crumb_dir = args.crumb_dir or (args.input_dir / ".crumb")
-    crumb_dir.mkdir(parents=True, exist_ok=True)
+    dry_run = args.dry_run
+
+    if not dry_run:
+        crumb_dir.mkdir(parents=True, exist_ok=True)
 
     count = 0
     for md_file in md_files:
@@ -163,6 +176,11 @@ def _import_via_crumb(args: argparse.Namespace, md_files: list[Path]) -> int:
         recipe = markdown_to_recipe(text)
         if not recipe.name:
             print(f"  Skipping {md_file.name}: no recipe name found")
+            continue
+
+        if dry_run:
+            print(f"  Would generate: {_safe_filename(recipe.name)}.crumb")
+            count += 1
             continue
 
         crumb_path = crumb_dir / (_safe_filename(recipe.name) + ".crumb")
@@ -173,13 +191,15 @@ def _import_via_crumb(args: argparse.Namespace, md_files: list[Path]) -> int:
             subprocess.run(["open", "-a", "Crouton", str(crumb_path)], check=False)
             time.sleep(0.5)  # Brief pause to avoid overwhelming the app
 
-    print(f"Generated {count} .crumb files in {crumb_dir}")
-    if args.open_in_app:
+    prefix = "[DRY RUN] " if dry_run else ""
+    print(f"{prefix}Generated {count} .crumb files in {crumb_dir}")
+    if args.open_in_app and not dry_run:
         print("Opening in Crouton...")
     return 0
 
 
 def _import_direct(args: argparse.Namespace, md_files: list[Path]) -> int:
+    dry_run = args.dry_run
     count = 0
     for md_file in md_files:
         text = md_file.read_text(encoding="utf-8")
@@ -188,12 +208,19 @@ def _import_direct(args: argparse.Namespace, md_files: list[Path]) -> int:
             print(f"  Skipping {md_file.name}: no recipe name found")
             continue
 
+        if dry_run:
+            print(f"  Would write: {recipe.name}")
+            count += 1
+            continue
+
         uuid = write_recipe(recipe, db_path=args.db_path, images_dir=args.images_dir)
         print(f"  Wrote: {recipe.name} ({uuid})")
         count += 1
 
-    print(f"Imported {count} recipes directly to database")
-    print("Restart Crouton to trigger CloudKit sync.")
+    prefix = "[DRY RUN] " if dry_run else ""
+    print(f"{prefix}Imported {count} recipes directly to database")
+    if not dry_run:
+        print("Restart Crouton to trigger CloudKit sync.")
     return 0
 
 
@@ -213,6 +240,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
     all_ok = True
     total_warnings = 0
+    valid_count = 0
     for md_file in md_files:
         text = md_file.read_text(encoding="utf-8")
         result = validate_markdown(text, file_path=str(md_file.name))
@@ -220,16 +248,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
         print()
         if not result.ok:
             all_ok = False
+        else:
+            valid_count += 1
         total_warnings += len(result.warnings)
 
     # Summary
     if len(md_files) > 1:
-        valid = sum(
-            1
-            for f in md_files
-            if validate_markdown(f.read_text(encoding="utf-8")).ok
-        )
-        print(f"{valid}/{len(md_files)} recipes valid")
+        print(f"{valid_count}/{len(md_files)} recipes valid")
 
     if not all_ok:
         return 1
@@ -248,17 +273,23 @@ def cmd_sync(args: argparse.Namespace) -> int:
     print_sync_status(status)
 
     if args.export_new and status.crouton_only:
-        print(f"\nExporting {len(status.crouton_only)} new recipes...")
+        dry_run = args.dry_run
+        prefix = "[DRY RUN] " if dry_run else ""
+        print(f"\n{prefix}Exporting {len(status.crouton_only)} new recipes...")
         recipes = read_all_recipes(args.db_path)
         embed = not args.no_images
         count = 0
         for recipe in recipes:
             if recipe.uuid in status.crouton_only:
+                if dry_run:
+                    print(f"  Would export: {recipe.name}")
+                    count += 1
+                    continue
                 md = recipe_to_markdown(recipe, images_dir=args.images_dir, embed_images=embed)
                 filename = _safe_filename(recipe.name) + ".md"
                 (md_dir / filename).write_text(md, encoding="utf-8")
                 count += 1
-        print(f"Exported {count} recipes")
+        print(f"{prefix}Exported {count} recipes")
 
     return 0
 

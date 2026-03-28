@@ -2,13 +2,36 @@
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
+import subprocess
+import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 from crouton_sync.models import Ingredient, Recipe, Step
 
 DEFAULT_DB_PATH = Path.home() / "Library/Group Containers/group.com.meals.ios/Meals.sqlite"
 DEFAULT_IMAGES_DIR = Path.home() / "Library/Group Containers/group.com.meals.ios/MealImages"
+
+# Tables that are valid for PK lookups and Z_MAX updates
+_VALID_TABLES = frozenset({
+    "ZCDMEAL",
+    "ZCDMEALSTEP",
+    "ZCDMEASUREDINGREDIENT",
+    "ZCDINGREDIENT",
+    "ATRANSACTION",
+    "ACHANGE",
+})
+
+_VALID_ENTITY_NAMES = frozenset({
+    "CDMeal",
+    "CDMealStep",
+    "CDMeasuredIngredient",
+    "CDIngredient",
+    "TRANSACTION",
+    "CHANGE",
+})
 
 
 def _connect(db_path: Path | None = None) -> sqlite3.Connection:
@@ -20,16 +43,46 @@ def _connect(db_path: Path | None = None) -> sqlite3.Connection:
     return conn
 
 
+@contextmanager
+def _open_db(db_path: Path | None = None):
+    """Context manager for database connections."""
+    conn = _connect(db_path)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def _backup_database(db_path: Path | None = None) -> Path:
+    """Create a backup of the database before writing. Returns backup path."""
+    path = db_path or DEFAULT_DB_PATH
+    backup_path = path.with_suffix(".sqlite.bak")
+    shutil.copy2(path, backup_path)
+    return backup_path
+
+
+def _is_crouton_running() -> bool:
+    """Check if the Crouton app is currently running."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        result = subprocess.run(
+            ["pgrep", "-x", "Crouton"],
+            capture_output=True,
+            check=False,
+        )
+        return result.returncode == 0
+    except FileNotFoundError:
+        return False
+
+
 def read_all_recipes(
     db_path: Path | None = None,
     include_deleted: bool = False,
 ) -> list[Recipe]:
     """Read all recipes from the Crouton database."""
-    conn = _connect(db_path)
-    try:
+    with _open_db(db_path) as conn:
         return _fetch_recipes(conn, include_deleted)
-    finally:
-        conn.close()
 
 
 def read_recipe_by_uuid(
@@ -37,12 +90,9 @@ def read_recipe_by_uuid(
     db_path: Path | None = None,
 ) -> Recipe | None:
     """Read a single recipe by UUID."""
-    conn = _connect(db_path)
-    try:
+    with _open_db(db_path) as conn:
         recipes = _fetch_recipes(conn, include_deleted=False, uuid_filter=uuid)
         return recipes[0] if recipes else None
-    finally:
-        conn.close()
 
 
 def _fetch_recipes(
@@ -212,12 +262,16 @@ def _build_recipe_tag_map(conn: sqlite3.Connection) -> dict[int, list[int]]:
 
 def _get_next_pk(conn: sqlite3.Connection, table: str) -> int:
     """Get the next available primary key for a Core Data table."""
+    if table not in _VALID_TABLES:
+        raise ValueError(f"Invalid table name: {table}")
     row = conn.execute(f"SELECT MAX(Z_PK) as max_pk FROM {table}").fetchone()
     return (row["max_pk"] or 0) + 1
 
 
 def _update_z_max(conn: sqlite3.Connection, entity_name: str, new_max: int) -> None:
     """Update Z_PRIMARYKEY.Z_MAX for the given entity."""
+    if entity_name not in _VALID_ENTITY_NAMES:
+        raise ValueError(f"Invalid entity name: {entity_name}")
     conn.execute(
         "UPDATE Z_PRIMARYKEY SET Z_MAX = ? WHERE Z_NAME = ? AND Z_MAX < ?",
         (new_max, entity_name, new_max),
@@ -296,111 +350,134 @@ def write_recipe(
         db_path: Path to Meals.sqlite.
         images_dir: Path to MealImages directory.
         image_data: Optional dict of filename → image bytes to write.
+
+    Raises:
+        RuntimeError: If Crouton is running or recipe UUID already exists.
     """
     import uuid as uuid_mod
 
-    conn = _connect(db_path)
+    if _is_crouton_running():
+        raise RuntimeError(
+            "Crouton is currently running. Quit Crouton before writing to the database "
+            "to avoid data corruption."
+        )
+
+    backup_path = _backup_database(db_path)
     img_dir = images_dir or DEFAULT_IMAGES_DIR
 
-    try:
-        recipe_uuid = recipe.uuid or str(uuid_mod.uuid4()).upper()
-        transaction_id = _create_transaction(conn)
+    with _open_db(db_path) as conn:
+        try:
+            recipe_uuid = recipe.uuid or str(uuid_mod.uuid4()).upper()
 
-        # Insert meal
-        meal_pk = _get_next_pk(conn, "ZCDMEAL")
-        conn.execute(
-            """
-            INSERT INTO ZCDMEAL (
-                Z_PK, Z_ENT, Z_OPT, ZNAME, ZUUID, ZSERVES, ZDURATION, ZCOOKINGDURATION,
-                ZDEFAULTSCALE, ZWEBLINK, ZSOURCENAME, ZNEUTRITIONALINFO, ZNOTES, ZMETHOD,
-                ZFOLDERIDS, ZIMAGENAMES, ZSOURCEIMAGENAME, ZHEADERIMAGE, ZRATING,
-                ZRAWDIFFICULTY, ZISPUBLICRECIPE, ZDELETEDFROMDEVICE, ZUPLOADED,
-                ZDATECREATED, ZDATEMODIFIED, ZRECORDID
-            ) VALUES (?, 6, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)
-            """,
-            (
-                meal_pk,
-                recipe.name,
-                recipe_uuid,
-                recipe.servings,
-                recipe.prep_time,
-                recipe.cook_time,
-                recipe.default_scale,
-                recipe.source_url or None,
-                recipe.source_name or None,
-                recipe.nutritional_info or None,
-                recipe.notes or None,
-                recipe.method or None,
-                ",".join(recipe.folder_ids) if recipe.folder_ids else None,
-                ",".join(recipe.image_filenames) if recipe.image_filenames else None,
-                recipe.source_image_filename or None,
-                recipe.header_image_filename or None,
-                recipe.rating,
-                recipe.difficulty or None,
-                1 if recipe.is_public else 0,
-                recipe.date_created,
-                recipe.date_modified,
-                recipe_uuid,
-            ),
-        )
-        _update_z_max(conn, "CDMeal", meal_pk)
-        _record_change(conn, transaction_id, 6, meal_pk, change_type=0)
+            # Check for duplicate UUID
+            existing = conn.execute(
+                "SELECT Z_PK FROM ZCDMEAL WHERE ZUUID = ?", (recipe_uuid,)
+            ).fetchone()
+            if existing:
+                raise RuntimeError(
+                    f"Recipe with UUID {recipe_uuid} already exists in the database. "
+                    "Use update_recipe_field to modify existing recipes."
+                )
 
-        # Insert steps
-        for step in recipe.steps:
-            step_pk = _get_next_pk(conn, "ZCDMEALSTEP")
-            step_uuid = step.uuid or str(uuid_mod.uuid4()).upper()
+            transaction_id = _create_transaction(conn)
+
+            # Insert meal
+            meal_pk = _get_next_pk(conn, "ZCDMEAL")
             conn.execute(
                 """
-                INSERT INTO ZCDMEALSTEP
-                    (Z_PK, Z_ENT, Z_OPT, ZMEAL, ZORDER, ZSTEP, ZISSECTION, ZUUID)
-                VALUES (?, 8, 1, ?, ?, ?, ?, ?)
-                """,
-                (step_pk, meal_pk, step.order, step.text, 1 if step.is_section else 0, step_uuid),
-            )
-            _update_z_max(conn, "CDMealStep", step_pk)
-            _record_change(conn, transaction_id, 8, step_pk, change_type=0)
-
-        # Insert ingredients
-        for ing in recipe.ingredients:
-            ing_pk = _find_or_create_ingredient(conn, ing.name)
-            mi_pk = _get_next_pk(conn, "ZCDMEASUREDINGREDIENT")
-            mi_uuid = ing.uuid or str(uuid_mod.uuid4()).upper()
-            conn.execute(
-                """
-                INSERT INTO ZCDMEASUREDINGREDIENT (
-                    Z_PK, Z_ENT, Z_OPT, ZMEAL, ZINGREDIENT, ZAMOUNT, ZSECONDARYAMOUNT,
-                    ZQUANTITYTYPE, ZORDER, ZUUID
-                ) VALUES (?, 9, 1, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO ZCDMEAL (
+                    Z_PK, Z_ENT, Z_OPT, ZNAME, ZUUID, ZSERVES, ZDURATION, ZCOOKINGDURATION,
+                    ZDEFAULTSCALE, ZWEBLINK, ZSOURCENAME, ZNEUTRITIONALINFO, ZNOTES, ZMETHOD,
+                    ZFOLDERIDS, ZIMAGENAMES, ZSOURCEIMAGENAME, ZHEADERIMAGE, ZRATING,
+                    ZRAWDIFFICULTY, ZISPUBLICRECIPE, ZDELETEDFROMDEVICE, ZUPLOADED,
+                    ZDATECREATED, ZDATEMODIFIED, ZRECORDID
+                ) VALUES (
+                    ?, 6, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?
+                )
                 """,
                 (
-                    mi_pk,
                     meal_pk,
-                    ing_pk,
-                    ing.amount,
-                    ing.secondary_amount,
-                    ing.quantity_type,
-                    ing.order,
-                    mi_uuid,
+                    recipe.name,
+                    recipe_uuid,
+                    recipe.servings,
+                    recipe.prep_time,
+                    recipe.cook_time,
+                    recipe.default_scale,
+                    recipe.source_url or None,
+                    recipe.source_name or None,
+                    recipe.nutritional_info or None,
+                    recipe.notes or None,
+                    recipe.method or None,
+                    ",".join(recipe.folder_ids) if recipe.folder_ids else None,
+                    ",".join(recipe.image_filenames) if recipe.image_filenames else None,
+                    recipe.source_image_filename or None,
+                    recipe.header_image_filename or None,
+                    recipe.rating,
+                    recipe.difficulty or None,
+                    1 if recipe.is_public else 0,
+                    recipe.date_created,
+                    recipe.date_modified,
+                    recipe_uuid,
                 ),
             )
-            _update_z_max(conn, "CDMeasuredIngredient", mi_pk)
-            _record_change(conn, transaction_id, 9, mi_pk, change_type=0)
+            _update_z_max(conn, "CDMeal", meal_pk)
+            _record_change(conn, transaction_id, 6, meal_pk, change_type=0)
 
-        # Write image files
-        if image_data:
-            for filename, data in image_data.items():
-                img_path = img_dir / filename
-                img_path.write_bytes(data)
+            # Insert steps
+            for step in recipe.steps:
+                step_pk = _get_next_pk(conn, "ZCDMEALSTEP")
+                step_uuid = step.uuid or str(uuid_mod.uuid4()).upper()
+                conn.execute(
+                    """
+                    INSERT INTO ZCDMEALSTEP
+                        (Z_PK, Z_ENT, Z_OPT, ZMEAL, ZORDER, ZSTEP, ZISSECTION, ZUUID)
+                    VALUES (?, 8, 1, ?, ?, ?, ?, ?)
+                    """,
+                    (step_pk, meal_pk, step.order, step.text,
+                     1 if step.is_section else 0, step_uuid),
+                )
+                _update_z_max(conn, "CDMealStep", step_pk)
+                _record_change(conn, transaction_id, 8, step_pk, change_type=0)
 
-        conn.commit()
-        return recipe_uuid
+            # Insert ingredients
+            for ing in recipe.ingredients:
+                ing_pk = _find_or_create_ingredient(conn, ing.name)
+                mi_pk = _get_next_pk(conn, "ZCDMEASUREDINGREDIENT")
+                mi_uuid = ing.uuid or str(uuid_mod.uuid4()).upper()
+                conn.execute(
+                    """
+                    INSERT INTO ZCDMEASUREDINGREDIENT (
+                        Z_PK, Z_ENT, Z_OPT, ZMEAL, ZINGREDIENT, ZAMOUNT, ZSECONDARYAMOUNT,
+                        ZQUANTITYTYPE, ZORDER, ZUUID
+                    ) VALUES (?, 9, 1, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        mi_pk,
+                        meal_pk,
+                        ing_pk,
+                        ing.amount,
+                        ing.secondary_amount,
+                        ing.quantity_type,
+                        ing.order,
+                        mi_uuid,
+                    ),
+                )
+                _update_z_max(conn, "CDMeasuredIngredient", mi_pk)
+                _record_change(conn, transaction_id, 9, mi_pk, change_type=0)
 
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+            # Write image files
+            if image_data:
+                for filename, data in image_data.items():
+                    img_path = img_dir / filename
+                    img_path.write_bytes(data)
+
+            conn.commit()
+            print(f"  Database backed up to {backup_path}")
+            return recipe_uuid
+
+        except Exception:
+            conn.rollback()
+            raise
 
 
 def update_recipe_field(
@@ -410,7 +487,6 @@ def update_recipe_field(
     db_path: Path | None = None,
 ) -> bool:
     """Update a single field on a recipe by UUID. Returns True if updated."""
-    # Allowed columns to prevent SQL injection
     allowed = {
         "ZNAME",
         "ZNOTES",
@@ -429,31 +505,38 @@ def update_recipe_field(
     if col not in allowed:
         raise ValueError(f"Field {field} is not allowed for direct update")
 
-    conn = _connect(db_path)
-    try:
-        # Get current PK
-        row = conn.execute("SELECT Z_PK, Z_OPT FROM ZCDMEAL WHERE ZUUID = ?", (uuid,)).fetchone()
-        if not row:
-            return False
-
-        pk = row["Z_PK"]
-        new_opt = (row["Z_OPT"] or 0) + 1
-
-        transaction_id = _create_transaction(conn)
-
-        conn.execute(
-            f"UPDATE ZCDMEAL SET {col} = ?, Z_OPT = ? WHERE Z_PK = ?",
-            (value, new_opt, pk),
+    if _is_crouton_running():
+        raise RuntimeError(
+            "Crouton is currently running. Quit Crouton before writing to the database "
+            "to avoid data corruption."
         )
-        _record_change(conn, transaction_id, 6, pk, change_type=2)
 
-        conn.commit()
-        return True
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+    _backup_database(db_path)
+
+    with _open_db(db_path) as conn:
+        try:
+            row = conn.execute(
+                "SELECT Z_PK, Z_OPT FROM ZCDMEAL WHERE ZUUID = ?", (uuid,)
+            ).fetchone()
+            if not row:
+                return False
+
+            pk = row["Z_PK"]
+            new_opt = (row["Z_OPT"] or 0) + 1
+
+            transaction_id = _create_transaction(conn)
+
+            conn.execute(
+                f"UPDATE ZCDMEAL SET {col} = ?, Z_OPT = ? WHERE Z_PK = ?",
+                (value, new_opt, pk),
+            )
+            _record_change(conn, transaction_id, 6, pk, change_type=2)
+
+            conn.commit()
+            return True
+        except Exception:
+            conn.rollback()
+            raise
 
 
 def get_image_path(filename: str, images_dir: Path | None = None) -> Path | None:
