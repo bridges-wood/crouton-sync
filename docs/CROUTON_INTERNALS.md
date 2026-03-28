@@ -1,6 +1,3 @@
-Updated file with formatted Markdown tables:
-
-````md
 # Crouton App Internals
 
 > Reverse-engineered reference for the **Crouton** recipe manager (macOS / iOS).
@@ -398,6 +395,3 @@ architecture:
 | **CloudKit**         | `CloudKitHelper`                                                                 |
 | **Classification**   | `RecipeClassifier`, `RecipeTagger`                                               |
 | **AI**               | `OpenAlConnector` (OpenAI integration)                                           |
-````
-
-If wanted, I can also collapse overly wide tables for better preview in VS Code.
