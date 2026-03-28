@@ -342,6 +342,8 @@ def write_recipe(
     db_path: Path | None = None,
     images_dir: Path | None = None,
     image_data: dict[str, bytes] | None = None,
+    *,
+    skip_backup: bool = False,
 ) -> str:
     """Write a recipe to the Crouton database. Returns the recipe UUID.
 
@@ -350,6 +352,7 @@ def write_recipe(
         db_path: Path to Meals.sqlite.
         images_dir: Path to MealImages directory.
         image_data: Optional dict of filename → image bytes to write.
+        skip_backup: If True, skip creating a backup (caller is responsible).
 
     Raises:
         RuntimeError: If Crouton is running or recipe UUID already exists.
@@ -362,7 +365,9 @@ def write_recipe(
             "to avoid data corruption."
         )
 
-    backup_path = _backup_database(db_path)
+    if not skip_backup:
+        _backup_database(db_path)
+
     img_dir = images_dir or DEFAULT_IMAGES_DIR
 
     with _open_db(db_path) as conn:
@@ -472,7 +477,6 @@ def write_recipe(
                     img_path.write_bytes(data)
 
             conn.commit()
-            print(f"  Database backed up to {backup_path}")
             return recipe_uuid
 
         except Exception:

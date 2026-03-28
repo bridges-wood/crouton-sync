@@ -11,6 +11,7 @@ from pathlib import Path
 from crouton_sync.crouton_db import (
     DEFAULT_DB_PATH,
     DEFAULT_IMAGES_DIR,
+    _backup_database,
     read_all_recipes,
     write_recipe,
 )
@@ -200,7 +201,13 @@ def _import_via_crumb(args: argparse.Namespace, md_files: list[Path]) -> int:
 
 def _import_direct(args: argparse.Namespace, md_files: list[Path]) -> int:
     dry_run = args.dry_run
+
+    if not dry_run:
+        backup_path = _backup_database(args.db_path)
+        print(f"  Database backed up to {backup_path}")
+
     count = 0
+    errors = 0
     for md_file in md_files:
         text = md_file.read_text(encoding="utf-8")
         recipe = markdown_to_recipe(text)
@@ -213,15 +220,23 @@ def _import_direct(args: argparse.Namespace, md_files: list[Path]) -> int:
             count += 1
             continue
 
-        uuid = write_recipe(recipe, db_path=args.db_path, images_dir=args.images_dir)
-        print(f"  Wrote: {recipe.name} ({uuid})")
-        count += 1
+        try:
+            uuid = write_recipe(
+                recipe, db_path=args.db_path, images_dir=args.images_dir, skip_backup=True
+            )
+            print(f"  Wrote: {recipe.name} ({uuid})")
+            count += 1
+        except RuntimeError as e:
+            print(f"  Error: {recipe.name}: {e}")
+            errors += 1
 
     prefix = "[DRY RUN] " if dry_run else ""
     print(f"{prefix}Imported {count} recipes directly to database")
-    if not dry_run:
+    if errors:
+        print(f"  {errors} recipes failed")
+    if not dry_run and count > 0:
         print("Restart Crouton to trigger CloudKit sync.")
-    return 0
+    return 1 if errors and count == 0 else 0
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
@@ -278,9 +293,10 @@ def cmd_sync(args: argparse.Namespace) -> int:
         print(f"\n{prefix}Exporting {len(status.crouton_only)} new recipes...")
         recipes = read_all_recipes(args.db_path)
         embed = not args.no_images
+        crouton_only_set = set(status.crouton_only)
         count = 0
         for recipe in recipes:
-            if recipe.uuid in status.crouton_only:
+            if recipe.uuid in crouton_only_set:
                 if dry_run:
                     print(f"  Would export: {recipe.name}")
                     count += 1

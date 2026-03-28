@@ -168,8 +168,8 @@ def markdown_to_recipe(text: str) -> Recipe:
         folders = [f.strip() for f in folders.split(",") if f.strip()]
 
     return Recipe(
-        name=title or meta.get("name", ""),
-        uuid=meta.get("crouton_uuid", ""),
+        name=title or meta.get("name") or "",
+        uuid=str(meta.get("crouton_uuid") or ""),
         ingredients=ingredients,
         steps=steps,
         tags=tags,
@@ -178,12 +178,12 @@ def markdown_to_recipe(text: str) -> Recipe:
         cook_time=_parse_float(meta.get("cook_time")),
         servings=_parse_int(meta.get("servings")),
         default_scale=_parse_float(meta.get("default_scale")) or 1.0,
-        source_name=meta.get("source_name", ""),
-        source_url=meta.get("source_url", ""),
-        nutritional_info=meta.get("nutritional_info", "").strip(),
+        source_name=meta.get("source_name") or "",
+        source_url=meta.get("source_url") or "",
+        nutritional_info=(meta.get("nutritional_info") or "").strip(),
         notes=notes.strip(),
         rating=_parse_int(meta.get("rating")) or 0,
-        difficulty=meta.get("difficulty", ""),
+        difficulty=meta.get("difficulty") or "",
         is_public=meta.get("is_public", False),
     )
 

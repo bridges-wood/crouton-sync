@@ -12,7 +12,7 @@ from crouton_sync.models import Ingredient, Recipe, Step
 
 def read_crumb(path: Path) -> Recipe:
     """Parse a .crumb file into a Recipe model."""
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         data = json.load(f)
 
     ingredients = []
@@ -64,7 +64,7 @@ def read_crumb(path: Path) -> Recipe:
 def write_crumb(recipe: Recipe, path: Path, image_data: list[bytes] | None = None) -> None:
     """Serialize a Recipe model to a .crumb JSON file."""
     data = recipe_to_crumb_dict(recipe, image_data)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
