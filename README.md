@@ -12,6 +12,10 @@ Bidirectional sync between the [Crouton](https://crouton.app) recipe app and Obs
 ## Installation
 
 ```bash
+# Install as a global CLI tool (available from any directory)
+uv tool install .
+
+# Or for development (editable install in a local venv)
 uv sync
 ```
 
