@@ -21,7 +21,14 @@ from crouton_sync.crouton_db import (
     write_recipe,
 )
 from crouton_sync.crumb import write_crumb
-from crouton_sync.markdown import IMAGES_SUBDIR, markdown_to_recipe, recipe_to_markdown
+from crouton_sync.markdown import (
+    IMAGE_FORMAT_OBSIDIAN,
+    IMAGE_FORMAT_STANDARD,
+    IMAGES_SUBDIR,
+    _image_display_name,
+    markdown_to_recipe,
+    recipe_to_markdown,
+)
 from crouton_sync.sync import compare, print_sync_status
 from crouton_sync.verify import format_result, validate_markdown
 
@@ -54,7 +61,12 @@ def main(argv: list[str] | None = None) -> int:
     # ── export ──
     export_parser = subparsers.add_parser("export", help="Export Crouton recipes to Markdown")
     export_parser.add_argument("output_dir", type=Path, help="Output directory for Markdown files")
-    export_parser.add_argument("--no-images", action="store_true", help="Skip embedding images")
+    export_parser.add_argument("--no-images", action="store_true", help="Skip including images")
+    export_parser.add_argument(
+        "--standard-images",
+        action="store_true",
+        help="Use standard Markdown image links instead of Obsidian ![[]] syntax",
+    )
     export_parser.add_argument(
         "--recipe", type=str, help="Export a single recipe by name (substring match)"
     )
@@ -110,7 +122,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Export recipes that are only in Crouton",
     )
     sync_parser.add_argument(
-        "--no-images", action="store_true", help="Skip embedding images when exporting"
+        "--no-images", action="store_true", help="Skip including images when exporting"
+    )
+    sync_parser.add_argument(
+        "--standard-images",
+        action="store_true",
+        help="Use standard Markdown image links instead of Obsidian ![[]] syntax",
     )
     sync_parser.add_argument(
         "--dry-run",
@@ -146,6 +163,7 @@ def cmd_export(args: argparse.Namespace) -> int:
             return 1
 
     include_images = not args.no_images
+    img_fmt = IMAGE_FORMAT_STANDARD if args.standard_images else IMAGE_FORMAT_OBSIDIAN
     count = 0
     img_count = 0
 
@@ -157,7 +175,9 @@ def cmd_export(args: argparse.Namespace) -> int:
         task = progress.add_task("Exporting recipes...", total=len(recipes))
 
         for recipe in recipes:
-            md = recipe_to_markdown(recipe, include_images=include_images)
+            md = recipe_to_markdown(
+                recipe, include_images=include_images, image_format=img_fmt
+            )
             filename = _safe_filename(recipe.name) + ".md"
             (output_dir / filename).write_text(md, encoding="utf-8")
             count += 1
@@ -209,7 +229,7 @@ def _copy_recipe_images(
             )
             continue
 
-        dest_path = dest_dir / img_name
+        dest_path = dest_dir / _image_display_name(img_name)
         if not dest_path.exists() or dest_path.stat().st_mtime < src_path.stat().st_mtime:
             shutil.copy2(src_path, dest_path)
             copied += 1
@@ -425,6 +445,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
         recipes = read_all_recipes(args.db_path)
         include_images = not args.no_images
+        img_fmt = IMAGE_FORMAT_STANDARD if args.standard_images else IMAGE_FORMAT_OBSIDIAN
         crouton_only_set = set(status.crouton_only)
         count = 0
         img_count = 0
@@ -442,7 +463,9 @@ def cmd_sync(args: argparse.Namespace) -> int:
                         console.print(f"    Would export: {recipe.name}")
                         count += 1
                     else:
-                        md = recipe_to_markdown(recipe, include_images=include_images)
+                        md = recipe_to_markdown(
+                            recipe, include_images=include_images, image_format=img_fmt
+                        )
                         filename = _safe_filename(recipe.name) + ".md"
                         (md_dir / filename).write_text(md, encoding="utf-8")
                         count += 1

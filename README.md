@@ -30,6 +30,9 @@ crouton-sync export ~/obsidian-vault/Recipes/
 # Export without images (faster, smaller files)
 crouton-sync export ~/obsidian-vault/Recipes/ --no-images
 
+# Use standard Markdown image links instead of Obsidian ![[]] syntax
+crouton-sync export ~/obsidian-vault/Recipes/ --standard-images
+
 # Export a single recipe by name
 crouton-sync export ~/obsidian-vault/Recipes/ --recipe "Oven-Roasted Asparagus"
 ```
@@ -84,7 +87,7 @@ crouton-sync --images-dir /path/to/MealImages/ export ./output/
 
 ## Markdown Format
 
-Exported recipes use YAML frontmatter for metadata and standard Markdown for content. Images are copied to an `images/` subdirectory and referenced by filename:
+Exported recipes use YAML frontmatter for metadata and standard Markdown for content. Images are copied to an `images/` subdirectory as JPEGs and referenced using Obsidian wiki-link syntax by default:
 
 ```markdown
 ---
@@ -104,7 +107,7 @@ nutritional_info: |
 
 # Oven-Roasted Asparagus
 
-![recipe-image](images/asparagus-photo.jpg)
+![[images/asparagus-photo.jpg]]
 
 ## Ingredients
 

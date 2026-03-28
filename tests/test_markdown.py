@@ -121,16 +121,28 @@ class TestRoundtrip:
         assert "Protein: 10g" in parsed.nutritional_info
 
     def test_image_file_references(self):
-        """recipe_to_markdown emits file references, not base64."""
+        """recipe_to_markdown emits standard file references when requested."""
         recipe = Recipe(
             name="Image Test",
             uuid="IMG-1234",
             image_filenames=["photo1.jpg", "photo2.jpg"],
         )
-        md = recipe_to_markdown(recipe, include_images=True)
+        md = recipe_to_markdown(recipe, include_images=True, image_format="standard")
         assert "![recipe-image](images/photo1.jpg)" in md
         assert "![recipe-image](images/photo2.jpg)" in md
         assert "base64" not in md
+
+    def test_image_obsidian_format(self):
+        """recipe_to_markdown uses Obsidian wiki-links by default."""
+        recipe = Recipe(
+            name="Obsidian Test",
+            uuid="OBS-1234",
+            image_filenames=["photo1.jpg", "photo2.jpg"],
+        )
+        md = recipe_to_markdown(recipe, include_images=True)
+        assert "![[images/photo1.jpg]]" in md
+        assert "![[images/photo2.jpg]]" in md
+        assert "![recipe-image]" not in md
 
     def test_image_file_references_no_images_flag(self):
         """include_images=False suppresses image references."""
@@ -143,7 +155,7 @@ class TestRoundtrip:
         assert "photo.jpg" not in md
 
     def test_parse_image_file_references(self):
-        """markdown_to_recipe extracts image filenames from file refs."""
+        """markdown_to_recipe extracts image filenames from standard file refs."""
         md = (
             "---\ncrouton_uuid: X\n---\n\n"
             "# Test\n\n"
@@ -154,6 +166,40 @@ class TestRoundtrip:
         )
         recipe = markdown_to_recipe(md)
         assert recipe.image_filenames == ["photo1.jpg", "photo2.jpg"]
+
+    def test_parse_obsidian_image_references(self):
+        """markdown_to_recipe extracts image filenames from Obsidian wiki-links."""
+        md = (
+            "---\ncrouton_uuid: X\n---\n\n"
+            "# Test\n\n"
+            "![[images/photo1.jpg]]\n\n"
+            "![[images/photo2.jpg]]\n\n"
+            "## Ingredients\n\n- 1 cup flour\n\n"
+            "## Instructions\n\n1. Mix.\n"
+        )
+        recipe = markdown_to_recipe(md)
+        assert recipe.image_filenames == ["photo1.jpg", "photo2.jpg"]
+
+    def test_image_uuid_filenames_get_jpg_extension(self):
+        """UUID-style filenames without extensions get .jpg appended."""
+        recipe = Recipe(
+            name="UUID Image Test",
+            uuid="UUID-1234",
+            image_filenames=["C5B6EF24-0601-4C8B-9EA9-8B149844EFD7"],
+        )
+        md = recipe_to_markdown(recipe, include_images=True)
+        assert "C5B6EF24-0601-4C8B-9EA9-8B149844EFD7.jpg" in md
+
+    def test_image_existing_extension_preserved(self):
+        """Filenames that already have an extension are not double-suffixed."""
+        recipe = Recipe(
+            name="Ext Test",
+            uuid="EXT-1234",
+            image_filenames=["photo.png"],
+        )
+        md = recipe_to_markdown(recipe, include_images=True, image_format="standard")
+        assert "images/photo.png)" in md
+        assert ".png.jpg" not in md
 
     def test_parse_legacy_base64_backward_compat(self):
         """markdown_to_recipe still handles old base64 data URIs gracefully."""

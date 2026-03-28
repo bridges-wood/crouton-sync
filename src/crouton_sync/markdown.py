@@ -16,18 +16,36 @@ _SECTION_INSTRUCTIONS = "Instructions"
 _SECTION_NOTES = "Notes"
 _YAML_WIDTH = 200
 IMAGES_SUBDIR = "images"
+_IMAGE_EXT = ".jpg"
+
+# Image link format: "standard" or "obsidian"
+IMAGE_FORMAT_STANDARD = "standard"
+IMAGE_FORMAT_OBSIDIAN = "obsidian"
+
+
+def _image_display_name(raw_name: str) -> str:
+    """Ensure an image filename has a .jpg extension for display/export."""
+    from pathlib import PurePosixPath
+
+    if PurePosixPath(raw_name).suffix:
+        return raw_name
+    return raw_name + _IMAGE_EXT
 
 
 def recipe_to_markdown(
     recipe: Recipe,
     images_dir: Path | None = None,
     include_images: bool = True,
+    image_format: str = IMAGE_FORMAT_OBSIDIAN,
 ) -> str:
     """Convert a Recipe to Markdown with YAML frontmatter.
 
     When ``include_images`` is True, image filenames are referenced via
-    relative paths under ``IMAGES_SUBDIR`` (e.g. ``images/photo.jpg``).
-    The caller is responsible for copying the actual files.
+    relative paths under ``IMAGES_SUBDIR``.
+
+    ``image_format`` controls the link syntax:
+      - ``"standard"``: ``![recipe-image](images/filename.jpg)``
+      - ``"obsidian"``: ``![[images/filename.jpg]]``
     """
     lines: list[str] = []
 
@@ -72,7 +90,12 @@ def recipe_to_markdown(
     # Images — file references (caller copies actual files)
     if include_images and recipe.image_filenames:
         for img_name in recipe.image_filenames:
-            lines.append(f"![recipe-image]({IMAGES_SUBDIR}/{img_name})")
+            display_name = _image_display_name(img_name)
+            img_ref = f"{IMAGES_SUBDIR}/{display_name}"
+            if image_format == IMAGE_FORMAT_OBSIDIAN:
+                lines.append(f"![[{img_ref}]]")
+            else:
+                lines.append(f"![recipe-image]({img_ref})")
             lines.append("")
 
     # Ingredients
@@ -140,17 +163,24 @@ def markdown_to_recipe(text: str) -> Recipe:
             steps.append(Step(text=section_text, order=len(steps), is_section=True))
             continue
 
-        # Image — file reference: ![...](images/filename.jpg)
+        # Image — file reference (standard or Obsidian syntax)
         if stripped.startswith("!["):
+            # Standard: ![alt](images/filename)
             file_match = re.search(
                 rf"\]\({re.escape(IMAGES_SUBDIR)}/([^)]+)\)", stripped
             )
             if file_match:
                 image_filenames.append(file_match.group(1))
                 continue
+            # Obsidian: ![[images/filename]]
+            obsidian_match = re.search(
+                rf"!\[\[{re.escape(IMAGES_SUBDIR)}/([^\]]+)\]\]", stripped
+            )
+            if obsidian_match:
+                image_filenames.append(obsidian_match.group(1))
+                continue
             # Legacy base64 data URI (backward compat with old exports)
             if "data:image" in stripped:
-                # Parse but don't store — no way to recover a filename
                 continue
 
         # Ingredients
