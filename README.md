@@ -126,11 +126,13 @@ Optional notes here.
 ## How It Works
 
 Crouton stores recipes in a Core Data SQLite database at:
+
 ```
 ~/Library/Group Containers/group.com.meals.ios/Meals.sqlite
 ```
 
 Recipe images are stored as JPEGs in:
+
 ```
 ~/Library/Group Containers/group.com.meals.ios/MealImages/
 ```
