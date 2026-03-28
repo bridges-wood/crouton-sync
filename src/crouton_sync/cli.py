@@ -311,12 +311,17 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
 
 def _safe_filename(name: str) -> str:
-    """Convert a recipe name to a safe filename."""
-    # Replace problematic characters
+    """Convert a recipe name to a safe filename.
+
+    Raises ValueError if name is empty or produces an empty filename.
+    """
     safe = name.replace("/", "-").replace("\\", "-").replace(":", " -")
     safe = safe.replace('"', "'").replace("?", "").replace("*", "")
     safe = safe.replace("<", "").replace(">", "").replace("|", "-")
-    return safe.strip()
+    safe = safe.strip()
+    if not safe:
+        raise ValueError(f"Recipe name is empty or contains only special characters: {name!r}")
+    return safe
 
 
 if __name__ == "__main__":

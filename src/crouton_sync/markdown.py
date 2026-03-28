@@ -59,10 +59,20 @@ def recipe_to_markdown(
     lines.append("")
 
     # Image
+    max_image_size = 10 * 1024 * 1024  # 10 MB
     if embed_images and images_dir:
         for img_name in recipe.image_filenames:
             img_path = images_dir / img_name
             if img_path.exists():
+                if img_path.stat().st_size > max_image_size:
+                    import sys
+
+                    size_mb = img_path.stat().st_size / (1024 * 1024)
+                    print(
+                        f"Warning: Skipping large image {img_name} ({size_mb:.1f} MB)",
+                        file=sys.stderr,
+                    )
+                    continue
                 img_data = img_path.read_bytes()
                 b64 = base64.b64encode(img_data).decode("ascii")
                 lines.append(f"![recipe-image](data:image/jpeg;base64,{b64})")
@@ -246,17 +256,22 @@ def _parse_ingredient_line(text: str) -> Ingredient:
 
 
 def _split_frontmatter(text: str) -> tuple[str, str]:
-    """Split YAML frontmatter from body."""
-    if not text.startswith("---"):
+    """Split YAML frontmatter from body.
+
+    Matches closing ``---`` only when it appears on its own line,
+    preventing false splits when ``---`` appears inside a YAML value.
+    """
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
         return "", text
 
-    end = text.find("---", 3)
-    if end == -1:
-        return "", text
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            frontmatter = "\n".join(lines[1:i])
+            body = "\n".join(lines[i + 1 :])
+            return frontmatter.strip(), body.strip()
 
-    frontmatter = text[3:end].strip()
-    body = text[end + 3 :].strip()
-    return frontmatter, body
+    return "", text
 
 
 def _parse_yaml_frontmatter(text: str) -> dict:

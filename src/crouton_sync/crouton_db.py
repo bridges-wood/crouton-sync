@@ -54,9 +54,12 @@ def _open_db(db_path: Path | None = None):
 
 
 def _backup_database(db_path: Path | None = None) -> Path:
-    """Create a backup of the database before writing. Returns backup path."""
+    """Create a timestamped backup of the database before writing. Returns backup path."""
+    import datetime
+
     path = db_path or DEFAULT_DB_PATH
-    backup_path = path.with_suffix(".sqlite.bak")
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = path.parent / f"{path.stem}_{timestamp}.sqlite.bak"
     shutil.copy2(path, backup_path)
     return backup_path
 
@@ -473,7 +476,7 @@ def write_recipe(
             # Write image files
             if image_data:
                 for filename, data in image_data.items():
-                    img_path = img_dir / filename
+                    img_path = _validate_image_path(filename, img_dir)
                     img_path.write_bytes(data)
 
             conn.commit()
@@ -543,8 +546,22 @@ def update_recipe_field(
             raise
 
 
+def _validate_image_path(filename: str, img_dir: Path) -> Path:
+    """Validate that an image filename resolves within the images directory.
+
+    Raises ValueError if the path escapes the images directory.
+    """
+    path = (img_dir / filename).resolve()
+    if not path.is_relative_to(img_dir.resolve()):
+        raise ValueError(f"Invalid image filename (path traversal): {filename}")
+    return path
+
+
 def get_image_path(filename: str, images_dir: Path | None = None) -> Path | None:
     """Get the full path to a recipe image file, or None if not found."""
     img_dir = images_dir or DEFAULT_IMAGES_DIR
-    path = img_dir / filename
+    try:
+        path = _validate_image_path(filename, img_dir)
+    except ValueError:
+        return None
     return path if path.exists() else None
