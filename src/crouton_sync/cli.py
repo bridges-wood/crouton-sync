@@ -9,6 +9,9 @@ import sys
 import time
 from pathlib import Path
 
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn
+
 from crouton_sync.crouton_db import (
     DEFAULT_DB_PATH,
     DEFAULT_IMAGES_DIR,
@@ -24,6 +27,8 @@ from crouton_sync.verify import format_result, validate_markdown
 
 # Delay between opening .crumb files to avoid overwhelming the app
 _CRUMB_OPEN_DELAY = 0.5
+
+console = Console()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -137,26 +142,41 @@ def cmd_export(args: argparse.Namespace) -> int:
         query = args.recipe.lower()
         recipes = [r for r in recipes if query in r.name.lower()]
         if not recipes:
-            print(f"No recipes matching '{args.recipe}'")
+            console.print(f"[red]✗[/red]  No recipes matching '{args.recipe}'")
             return 1
 
     include_images = not args.no_images
     count = 0
     img_count = 0
-    for recipe in recipes:
-        md = recipe_to_markdown(recipe, include_images=include_images)
-        filename = _safe_filename(recipe.name) + ".md"
-        (output_dir / filename).write_text(md, encoding="utf-8")
-        count += 1
 
-        if include_images:
-            img_count += _copy_recipe_images(
-                recipe.image_filenames, args.images_dir, output_dir
-            )
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Exporting recipes...", total=len(recipes))
 
-    print(f"Exported {count} recipes to {output_dir}")
+        for recipe in recipes:
+            md = recipe_to_markdown(recipe, include_images=include_images)
+            filename = _safe_filename(recipe.name) + ".md"
+            (output_dir / filename).write_text(md, encoding="utf-8")
+            count += 1
+
+            if include_images:
+                img_count += _copy_recipe_images(
+                    recipe.image_filenames, args.images_dir, output_dir
+                )
+
+            progress.update(task, advance=1)
+
+    console.print(
+        f"[green]✓[/green]  Exported [cyan]{count}[/cyan] recipes to [blue]{output_dir}[/blue]"
+    )
     if img_count:
-        print(f"  Copied {img_count} images to {output_dir / IMAGES_SUBDIR}")
+        console.print(
+            f"    Copied [cyan]{img_count}[/cyan] images to "
+            f"[blue]{output_dir / IMAGES_SUBDIR}[/blue]"
+        )
     return 0
 
 
@@ -177,10 +197,16 @@ def _copy_recipe_images(
         try:
             src_path = _validate_image_path(img_name, src_images_dir)
         except ValueError:
-            print(f"  Warning: skipping invalid image path: {img_name}", file=sys.stderr)
+            console.print(
+                f"[yellow]⚠[/yellow]  Warning: skipping invalid image path: {img_name}",
+                file=sys.stderr,
+            )
             continue
         if not src_path.exists():
-            print(f"  Warning: image not found: {img_name}", file=sys.stderr)
+            console.print(
+                f"[yellow]⚠[/yellow]  Warning: image not found: {img_name}",
+                file=sys.stderr,
+            )
             continue
 
         dest_path = dest_dir / img_name
@@ -194,12 +220,12 @@ def _copy_recipe_images(
 def cmd_import(args: argparse.Namespace) -> int:
     input_dir: Path = args.input_dir
     if not input_dir.is_dir():
-        print(f"Input directory not found: {input_dir}")
+        console.print(f"[red]✗[/red]  Input directory not found: {input_dir}")
         return 1
 
     md_files = list(input_dir.glob("*.md"))
     if not md_files:
-        print(f"No .md files found in {input_dir}")
+        console.print(f"[red]✗[/red]  No .md files found in {input_dir}")
         return 1
 
     if args.mode == "crumb":
@@ -216,43 +242,61 @@ def _import_via_crumb(args: argparse.Namespace, md_files: list[Path]) -> int:
         crumb_dir.mkdir(parents=True, exist_ok=True)
 
     count = 0
-    for md_file in md_files:
-        text = md_file.read_text(encoding="utf-8")
-        recipe = markdown_to_recipe(text)
-        if not recipe.name:
-            print(f"  Skipping {md_file.name}: no recipe name found")
-            continue
 
-        if dry_run:
-            print(f"  Would generate: {_safe_filename(recipe.name)}.crumb")
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Generating .crumb files...", total=len(md_files))
+
+        for md_file in md_files:
+            text = md_file.read_text(encoding="utf-8")
+            recipe = markdown_to_recipe(text)
+            if not recipe.name:
+                console.print(f"    Skipping {md_file.name}: no recipe name found")
+                progress.update(task, advance=1)
+                continue
+
+            if dry_run:
+                console.print(f"    Would generate: {_safe_filename(recipe.name)}.crumb")
+                count += 1
+                progress.update(task, advance=1)
+                continue
+
+            # Collect image data from the images/ subdirectory next to the Markdown file
+            image_bytes: list[bytes] | None = None
+            if recipe.image_filenames:
+                images_src = md_file.parent / IMAGES_SUBDIR
+                image_bytes = []
+                for img_name in recipe.image_filenames:
+                    img_path = images_src / img_name
+                    if img_path.exists():
+                        image_bytes.append(img_path.read_bytes())
+
+            crumb_path = crumb_dir / (_safe_filename(recipe.name) + ".crumb")
+            write_crumb(recipe, crumb_path, image_data=image_bytes or None)
             count += 1
-            continue
 
-        # Collect image data from the images/ subdirectory next to the Markdown file
-        image_bytes: list[bytes] | None = None
-        if recipe.image_filenames:
-            images_src = md_file.parent / IMAGES_SUBDIR
-            image_bytes = []
-            for img_name in recipe.image_filenames:
-                img_path = images_src / img_name
-                if img_path.exists():
-                    image_bytes.append(img_path.read_bytes())
+            if args.open_in_app:
+                if sys.platform == "darwin":
+                    subprocess.run(["open", "-a", "Crouton", str(crumb_path)], check=False)
+                    time.sleep(_CRUMB_OPEN_DELAY)
+                else:
+                    console.print(
+                        f"    Auto-open not supported on {sys.platform}; open manually: "
+                        f"{crumb_path}"
+                    )
 
-        crumb_path = crumb_dir / (_safe_filename(recipe.name) + ".crumb")
-        write_crumb(recipe, crumb_path, image_data=image_bytes or None)
-        count += 1
+            progress.update(task, advance=1)
 
-        if args.open_in_app:
-            if sys.platform == "darwin":
-                subprocess.run(["open", "-a", "Crouton", str(crumb_path)], check=False)
-                time.sleep(_CRUMB_OPEN_DELAY)
-            else:
-                print(f"  Auto-open not supported on {sys.platform}; open manually: {crumb_path}")
-
-    prefix = "[DRY RUN] " if dry_run else ""
-    print(f"{prefix}Generated {count} .crumb files in {crumb_dir}")
+    prefix = "[dim]DRY RUN[/dim] " if dry_run else ""
+    console.print(
+        f"[green]✓[/green]  {prefix}Generated [cyan]{count}[/cyan] .crumb files in "
+        f"[blue]{crumb_dir}[/blue]"
+    )
     if args.open_in_app and not dry_run:
-        print("Opening in Crouton...")
+        console.print("[cyan]→[/cyan]  Opening in Crouton...")
     return 0
 
 
@@ -261,52 +305,66 @@ def _import_direct(args: argparse.Namespace, md_files: list[Path]) -> int:
 
     if not dry_run:
         backup_path = _backup_database(args.db_path)
-        print(f"  Database backed up to {backup_path}")
+        console.print(f"[dim]Database backed up to {backup_path}[/dim]")
 
     count = 0
     errors = 0
-    for md_file in md_files:
-        text = md_file.read_text(encoding="utf-8")
-        recipe = markdown_to_recipe(text)
-        if not recipe.name:
-            print(f"  Skipping {md_file.name}: no recipe name found")
-            continue
 
-        if dry_run:
-            print(f"  Would write: {recipe.name}")
-            count += 1
-            continue
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Importing recipes...", total=len(md_files))
 
-        # Collect image data from the images/ subdirectory next to the Markdown file
-        image_data: dict[str, bytes] | None = None
-        if recipe.image_filenames:
-            images_src = md_file.parent / IMAGES_SUBDIR
-            image_data = {}
-            for img_name in recipe.image_filenames:
-                img_path = images_src / img_name
-                if img_path.exists():
-                    image_data[img_name] = img_path.read_bytes()
+        for md_file in md_files:
+            text = md_file.read_text(encoding="utf-8")
+            recipe = markdown_to_recipe(text)
+            if not recipe.name:
+                console.print(f"    Skipping {md_file.name}: no recipe name found")
+                progress.update(task, advance=1)
+                continue
 
-        try:
-            uuid = write_recipe(
-                recipe,
-                db_path=args.db_path,
-                images_dir=args.images_dir,
-                image_data=image_data or None,
-                skip_backup=True,
-            )
-            print(f"  Wrote: {recipe.name} ({uuid})")
-            count += 1
-        except RuntimeError as e:
-            print(f"  Error: {recipe.name}: {e}")
-            errors += 1
+            if dry_run:
+                console.print(f"    Would write: {recipe.name}")
+                count += 1
+                progress.update(task, advance=1)
+                continue
 
-    prefix = "[DRY RUN] " if dry_run else ""
-    print(f"{prefix}Imported {count} recipes directly to database")
+            # Collect image data from the images/ subdirectory next to the Markdown file
+            image_data: dict[str, bytes] | None = None
+            if recipe.image_filenames:
+                images_src = md_file.parent / IMAGES_SUBDIR
+                image_data = {}
+                for img_name in recipe.image_filenames:
+                    img_path = images_src / img_name
+                    if img_path.exists():
+                        image_data[img_name] = img_path.read_bytes()
+
+            try:
+                uuid = write_recipe(
+                    recipe,
+                    db_path=args.db_path,
+                    images_dir=args.images_dir,
+                    image_data=image_data or None,
+                    skip_backup=True,
+                )
+                console.print(f"    [green]✓[/green] {recipe.name} ({uuid})")
+                count += 1
+            except RuntimeError as e:
+                console.print(f"    [red]✗[/red] {recipe.name}: {e}")
+                errors += 1
+
+            progress.update(task, advance=1)
+
+    prefix = "[dim]DRY RUN[/dim] " if dry_run else ""
+    console.print(
+        f"[green]✓[/green]  {prefix}Imported [cyan]{count}[/cyan] recipes directly to database"
+    )
     if errors:
-        print(f"  {errors} recipes failed")
+        console.print(f"    [yellow]⚠[/yellow] {errors} recipes failed")
     if not dry_run and count > 0:
-        print("Restart Crouton to trigger CloudKit sync.")
+        console.print("[cyan]→[/cyan]  Restart Crouton to trigger CloudKit sync.")
     return 1 if errors and count == 0 else 0
 
 
@@ -318,10 +376,10 @@ def cmd_verify(args: argparse.Namespace) -> int:
         elif target.is_file():
             md_files.append(target)
         else:
-            print(f"Not found: {target}")
+            console.print(f"[yellow]⚠[/yellow]  Not found: {target}")
 
     if not md_files:
-        print("No .md files found to verify")
+        console.print("[red]✗[/red]  No .md files found to verify")
         return 1
 
     all_ok = True
@@ -340,7 +398,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
     # Summary
     if len(md_files) > 1:
-        print(f"{valid_count}/{len(md_files)} recipes valid")
+        console.print(f"\n[cyan]{valid_count}[/cyan]/[cyan]{len(md_files)}[/cyan] recipes valid")
 
     if not all_ok:
         return 1
@@ -352,7 +410,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
 def cmd_sync(args: argparse.Namespace) -> int:
     md_dir: Path = args.markdown_dir
     if not md_dir.is_dir():
-        print(f"Markdown directory not found: {md_dir}")
+        console.print(f"[red]✗[/red]  Markdown directory not found: {md_dir}")
         return 1
 
     status = compare(md_dir, db_path=args.db_path)
@@ -360,31 +418,48 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
     if args.export_new and status.crouton_only:
         dry_run = args.dry_run
-        prefix = "[DRY RUN] " if dry_run else ""
-        print(f"\n{prefix}Exporting {len(status.crouton_only)} new recipes...")
+        prefix = "[dim]DRY RUN[/dim] " if dry_run else ""
+        console.print(
+            f"\n[cyan]→[/cyan]  {prefix}Exporting {len(status.crouton_only)} new recipes..."
+        )
+
         recipes = read_all_recipes(args.db_path)
         include_images = not args.no_images
         crouton_only_set = set(status.crouton_only)
         count = 0
         img_count = 0
-        for recipe in recipes:
-            if recipe.uuid in crouton_only_set:
-                if dry_run:
-                    print(f"  Would export: {recipe.name}")
-                    count += 1
-                    continue
-                md = recipe_to_markdown(recipe, include_images=include_images)
-                filename = _safe_filename(recipe.name) + ".md"
-                (md_dir / filename).write_text(md, encoding="utf-8")
-                count += 1
 
-                if include_images:
-                    img_count += _copy_recipe_images(
-                        recipe.image_filenames, args.images_dir, md_dir
-                    )
-        print(f"{prefix}Exported {count} recipes")
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Exporting new recipes...", total=len(recipes))
+
+            for recipe in recipes:
+                if recipe.uuid in crouton_only_set:
+                    if dry_run:
+                        console.print(f"    Would export: {recipe.name}")
+                        count += 1
+                    else:
+                        md = recipe_to_markdown(recipe, include_images=include_images)
+                        filename = _safe_filename(recipe.name) + ".md"
+                        (md_dir / filename).write_text(md, encoding="utf-8")
+                        count += 1
+
+                        if include_images:
+                            img_count += _copy_recipe_images(
+                                recipe.image_filenames, args.images_dir, md_dir
+                            )
+
+                progress.update(task, advance=1)
+
+        console.print(f"[green]✓[/green]  {prefix}Exported [cyan]{count}[/cyan] recipes")
         if img_count:
-            print(f"  Copied {img_count} images to {md_dir / IMAGES_SUBDIR}")
+            console.print(
+                f"    Copied [cyan]{img_count}[/cyan] images to "
+                f"[blue]{md_dir / IMAGES_SUBDIR}[/blue]"
+            )
 
     return 0
 
