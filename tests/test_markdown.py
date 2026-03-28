@@ -78,7 +78,7 @@ class TestRoundtrip:
         )
 
         # Export to markdown
-        md = recipe_to_markdown(recipe, embed_images=False)
+        md = recipe_to_markdown(recipe, include_images=False)
 
         # Import back
         parsed = markdown_to_recipe(md)
@@ -115,7 +115,57 @@ class TestRoundtrip:
             uuid="NUTR-1234",
             nutritional_info="Calories: 200\nProtein: 10g",
         )
-        md = recipe_to_markdown(recipe, embed_images=False)
+        md = recipe_to_markdown(recipe, include_images=False)
         parsed = markdown_to_recipe(md)
         assert "Calories: 200" in parsed.nutritional_info
         assert "Protein: 10g" in parsed.nutritional_info
+
+    def test_image_file_references(self):
+        """recipe_to_markdown emits file references, not base64."""
+        recipe = Recipe(
+            name="Image Test",
+            uuid="IMG-1234",
+            image_filenames=["photo1.jpg", "photo2.jpg"],
+        )
+        md = recipe_to_markdown(recipe, include_images=True)
+        assert "![recipe-image](images/photo1.jpg)" in md
+        assert "![recipe-image](images/photo2.jpg)" in md
+        assert "base64" not in md
+
+    def test_image_file_references_no_images_flag(self):
+        """include_images=False suppresses image references."""
+        recipe = Recipe(
+            name="No Image Test",
+            uuid="NOIMG-1234",
+            image_filenames=["photo.jpg"],
+        )
+        md = recipe_to_markdown(recipe, include_images=False)
+        assert "photo.jpg" not in md
+
+    def test_parse_image_file_references(self):
+        """markdown_to_recipe extracts image filenames from file refs."""
+        md = (
+            "---\ncrouton_uuid: X\n---\n\n"
+            "# Test\n\n"
+            "![recipe-image](images/photo1.jpg)\n\n"
+            "![recipe-image](images/photo2.jpg)\n\n"
+            "## Ingredients\n\n- 1 cup flour\n\n"
+            "## Instructions\n\n1. Mix.\n"
+        )
+        recipe = markdown_to_recipe(md)
+        assert recipe.image_filenames == ["photo1.jpg", "photo2.jpg"]
+
+    def test_parse_legacy_base64_backward_compat(self):
+        """markdown_to_recipe still handles old base64 data URIs gracefully."""
+        md = (
+            "---\ncrouton_uuid: X\n---\n\n"
+            "# Test\n\n"
+            "![recipe-image](data:image/jpeg;base64,AAAA)\n\n"
+            "## Ingredients\n\n- 1 cup flour\n\n"
+            "## Instructions\n\n1. Mix.\n"
+        )
+        recipe = markdown_to_recipe(md)
+        # Base64 images don't produce filenames (no filename to extract)
+        assert recipe.image_filenames == []
+        # But parsing doesn't crash
+        assert recipe.name == "Test"

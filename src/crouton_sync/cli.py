@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import subprocess
 import sys
 import time
@@ -12,11 +13,12 @@ from crouton_sync.crouton_db import (
     DEFAULT_DB_PATH,
     DEFAULT_IMAGES_DIR,
     _backup_database,
+    _validate_image_path,
     read_all_recipes,
     write_recipe,
 )
 from crouton_sync.crumb import write_crumb
-from crouton_sync.markdown import markdown_to_recipe, recipe_to_markdown
+from crouton_sync.markdown import IMAGES_SUBDIR, markdown_to_recipe, recipe_to_markdown
 from crouton_sync.sync import compare, print_sync_status
 from crouton_sync.verify import format_result, validate_markdown
 
@@ -138,16 +140,55 @@ def cmd_export(args: argparse.Namespace) -> int:
             print(f"No recipes matching '{args.recipe}'")
             return 1
 
-    embed = not args.no_images
+    include_images = not args.no_images
     count = 0
+    img_count = 0
     for recipe in recipes:
-        md = recipe_to_markdown(recipe, images_dir=args.images_dir, embed_images=embed)
+        md = recipe_to_markdown(recipe, include_images=include_images)
         filename = _safe_filename(recipe.name) + ".md"
         (output_dir / filename).write_text(md, encoding="utf-8")
         count += 1
 
+        if include_images:
+            img_count += _copy_recipe_images(
+                recipe.image_filenames, args.images_dir, output_dir
+            )
+
     print(f"Exported {count} recipes to {output_dir}")
+    if img_count:
+        print(f"  Copied {img_count} images to {output_dir / IMAGES_SUBDIR}")
     return 0
+
+
+def _copy_recipe_images(
+    image_filenames: list[str],
+    src_images_dir: Path,
+    output_dir: Path,
+) -> int:
+    """Copy recipe image files to the output images subdirectory. Returns count copied."""
+    if not image_filenames:
+        return 0
+
+    dest_dir = output_dir / IMAGES_SUBDIR
+    dest_dir.mkdir(exist_ok=True)
+    copied = 0
+
+    for img_name in image_filenames:
+        try:
+            src_path = _validate_image_path(img_name, src_images_dir)
+        except ValueError:
+            print(f"  Warning: skipping invalid image path: {img_name}", file=sys.stderr)
+            continue
+        if not src_path.exists():
+            print(f"  Warning: image not found: {img_name}", file=sys.stderr)
+            continue
+
+        dest_path = dest_dir / img_name
+        if not dest_path.exists() or dest_path.stat().st_mtime < src_path.stat().st_mtime:
+            shutil.copy2(src_path, dest_path)
+            copied += 1
+
+    return copied
 
 
 def cmd_import(args: argparse.Namespace) -> int:
@@ -187,8 +228,18 @@ def _import_via_crumb(args: argparse.Namespace, md_files: list[Path]) -> int:
             count += 1
             continue
 
+        # Collect image data from the images/ subdirectory next to the Markdown file
+        image_bytes: list[bytes] | None = None
+        if recipe.image_filenames:
+            images_src = md_file.parent / IMAGES_SUBDIR
+            image_bytes = []
+            for img_name in recipe.image_filenames:
+                img_path = images_src / img_name
+                if img_path.exists():
+                    image_bytes.append(img_path.read_bytes())
+
         crumb_path = crumb_dir / (_safe_filename(recipe.name) + ".crumb")
-        write_crumb(recipe, crumb_path)
+        write_crumb(recipe, crumb_path, image_data=image_bytes or None)
         count += 1
 
         if args.open_in_app:
@@ -226,9 +277,23 @@ def _import_direct(args: argparse.Namespace, md_files: list[Path]) -> int:
             count += 1
             continue
 
+        # Collect image data from the images/ subdirectory next to the Markdown file
+        image_data: dict[str, bytes] | None = None
+        if recipe.image_filenames:
+            images_src = md_file.parent / IMAGES_SUBDIR
+            image_data = {}
+            for img_name in recipe.image_filenames:
+                img_path = images_src / img_name
+                if img_path.exists():
+                    image_data[img_name] = img_path.read_bytes()
+
         try:
             uuid = write_recipe(
-                recipe, db_path=args.db_path, images_dir=args.images_dir, skip_backup=True
+                recipe,
+                db_path=args.db_path,
+                images_dir=args.images_dir,
+                image_data=image_data or None,
+                skip_backup=True,
             )
             print(f"  Wrote: {recipe.name} ({uuid})")
             count += 1
@@ -298,20 +363,28 @@ def cmd_sync(args: argparse.Namespace) -> int:
         prefix = "[DRY RUN] " if dry_run else ""
         print(f"\n{prefix}Exporting {len(status.crouton_only)} new recipes...")
         recipes = read_all_recipes(args.db_path)
-        embed = not args.no_images
+        include_images = not args.no_images
         crouton_only_set = set(status.crouton_only)
         count = 0
+        img_count = 0
         for recipe in recipes:
             if recipe.uuid in crouton_only_set:
                 if dry_run:
                     print(f"  Would export: {recipe.name}")
                     count += 1
                     continue
-                md = recipe_to_markdown(recipe, images_dir=args.images_dir, embed_images=embed)
+                md = recipe_to_markdown(recipe, include_images=include_images)
                 filename = _safe_filename(recipe.name) + ".md"
                 (md_dir / filename).write_text(md, encoding="utf-8")
                 count += 1
+
+                if include_images:
+                    img_count += _copy_recipe_images(
+                        recipe.image_filenames, args.images_dir, md_dir
+                    )
         print(f"{prefix}Exported {count} recipes")
+        if img_count:
+            print(f"  Copied {img_count} images to {md_dir / IMAGES_SUBDIR}")
 
     return 0
 

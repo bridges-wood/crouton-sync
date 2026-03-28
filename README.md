@@ -84,7 +84,7 @@ crouton-sync --images-dir /path/to/MealImages/ export ./output/
 
 ## Markdown Format
 
-Exported recipes use YAML frontmatter for metadata and standard Markdown for content:
+Exported recipes use YAML frontmatter for metadata and standard Markdown for content. Images are copied to an `images/` subdirectory and referenced by filename:
 
 ```markdown
 ---
@@ -103,6 +103,8 @@ nutritional_info: |
 ---
 
 # Oven-Roasted Asparagus
+
+![recipe-image](images/asparagus-photo.jpg)
 
 ## Ingredients
 
@@ -133,7 +135,7 @@ Recipe images are stored as JPEGs in:
 ~/Library/Group Containers/group.com.meals.ios/MealImages/
 ```
 
-This tool reads directly from (and optionally writes to) these files. See [`docs/CROUTON_INTERNALS.md`](docs/CROUTON_INTERNALS.md) for full reverse engineering documentation.
+This tool reads directly from (and optionally writes to) these files. When exporting, images are copied to an `images/` subdirectory alongside the Markdown files — no base64 encoding. See [`docs/CROUTON_INTERNALS.md`](docs/CROUTON_INTERNALS.md) for full reverse engineering documentation.
 
 ## Development
 

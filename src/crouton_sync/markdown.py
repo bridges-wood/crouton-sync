@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import re
 from pathlib import Path
 
@@ -16,15 +15,20 @@ _SECTION_INGREDIENTS = "Ingredients"
 _SECTION_INSTRUCTIONS = "Instructions"
 _SECTION_NOTES = "Notes"
 _YAML_WIDTH = 200
-_MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
+IMAGES_SUBDIR = "images"
 
 
 def recipe_to_markdown(
     recipe: Recipe,
     images_dir: Path | None = None,
-    embed_images: bool = True,
+    include_images: bool = True,
 ) -> str:
-    """Convert a Recipe to Markdown with YAML frontmatter."""
+    """Convert a Recipe to Markdown with YAML frontmatter.
+
+    When ``include_images`` is True, image filenames are referenced via
+    relative paths under ``IMAGES_SUBDIR`` (e.g. ``images/photo.jpg``).
+    The caller is responsible for copying the actual files.
+    """
     lines: list[str] = []
 
     # YAML frontmatter
@@ -65,25 +69,11 @@ def recipe_to_markdown(
     lines.append(f"# {recipe.name}")
     lines.append("")
 
-    # Image
-    if embed_images and images_dir:
+    # Images — file references (caller copies actual files)
+    if include_images and recipe.image_filenames:
         for img_name in recipe.image_filenames:
-            img_path = images_dir / img_name
-            if img_path.exists():
-                if img_path.stat().st_size > _MAX_IMAGE_SIZE:
-                    import sys
-
-                    size_mb = img_path.stat().st_size / (1024 * 1024)
-                    print(
-                        f"Warning: Skipping large image {img_name} ({size_mb:.1f} MB)",
-                        file=sys.stderr,
-                    )
-                    continue
-                img_data = img_path.read_bytes()
-                b64 = base64.b64encode(img_data).decode("ascii")
-                lines.append(f"![recipe-image](data:image/jpeg;base64,{b64})")
-                lines.append("")
-                break  # Only embed the first image
+            lines.append(f"![recipe-image]({IMAGES_SUBDIR}/{img_name})")
+            lines.append("")
 
     # Ingredients
     if recipe.ingredients:
@@ -118,7 +108,7 @@ def recipe_to_markdown(
 
 
 def markdown_to_recipe(text: str) -> Recipe:
-    """Parse Obsidian Markdown into a Recipe model."""
+    """Parse Markdown with YAML frontmatter into a Recipe model."""
     # Split frontmatter and body
     frontmatter, body = _split_frontmatter(text)
     meta = _parse_yaml_frontmatter(frontmatter)
@@ -128,7 +118,7 @@ def markdown_to_recipe(text: str) -> Recipe:
     ingredients: list[Ingredient] = []
     steps: list[Step] = []
     notes = ""
-    image_data: list[str] = []
+    image_filenames: list[str] = []
     current_section = ""
 
     for line in body.split("\n"):
@@ -150,12 +140,18 @@ def markdown_to_recipe(text: str) -> Recipe:
             steps.append(Step(text=section_text, order=len(steps), is_section=True))
             continue
 
-        # Image
-        if stripped.startswith("![") and "data:image" in stripped:
-            match = re.search(r"data:image/\w+;base64,([A-Za-z0-9+/=]+)", stripped)
-            if match:
-                image_data.append(match.group(1))
-            continue
+        # Image — file reference: ![...](images/filename.jpg)
+        if stripped.startswith("!["):
+            file_match = re.search(
+                rf"\]\({re.escape(IMAGES_SUBDIR)}/([^)]+)\)", stripped
+            )
+            if file_match:
+                image_filenames.append(file_match.group(1))
+                continue
+            # Legacy base64 data URI (backward compat with old exports)
+            if "data:image" in stripped:
+                # Parse but don't store — no way to recover a filename
+                continue
 
         # Ingredients
         if current_section == _SECTION_INGREDIENTS.lower() and stripped.startswith("- "):
@@ -190,6 +186,7 @@ def markdown_to_recipe(text: str) -> Recipe:
         steps=steps,
         tags=tags,
         folders=folders,
+        image_filenames=image_filenames,
         prep_time=_parse_float(meta.get("prep_time")),
         cook_time=_parse_float(meta.get("cook_time")),
         servings=_parse_int(meta.get("servings")),

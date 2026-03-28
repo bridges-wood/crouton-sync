@@ -21,7 +21,7 @@ class TestSQLiteToMarkdownRoundtrip:
     def test_roundtrip_preserves_fields(self):
         recipes = read_all_recipes()
         for recipe in recipes[:5]:
-            md = recipe_to_markdown(recipe, embed_images=False)
+            md = recipe_to_markdown(recipe, include_images=False)
             parsed = markdown_to_recipe(md)
 
             assert parsed.name == recipe.name, f"Name mismatch for {recipe.name}"
@@ -71,7 +71,7 @@ class TestFullPipeline:
         recipe = recipes[0]
 
         # SQLite → Markdown
-        md = recipe_to_markdown(recipe, embed_images=False)
+        md = recipe_to_markdown(recipe, include_images=False)
 
         # Markdown → Recipe
         parsed = markdown_to_recipe(md)
