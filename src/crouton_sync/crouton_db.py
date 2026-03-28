@@ -11,8 +11,24 @@ from pathlib import Path
 
 from crouton_sync.models import Ingredient, Recipe, Step
 
+# ── Default paths (macOS / Crouton) ──────────────────────────────────────────
 DEFAULT_DB_PATH = Path.home() / "Library/Group Containers/group.com.meals.ios/Meals.sqlite"
 DEFAULT_IMAGES_DIR = Path.home() / "Library/Group Containers/group.com.meals.ios/MealImages"
+
+# ── Core Data constants ──────────────────────────────────────────────────────
+# Seconds between Unix epoch (1970-01-01) and Core Data epoch (2001-01-01)
+_CORE_DATA_EPOCH_OFFSET = 978307200
+
+# Z_ENT (entity type) codes in Crouton's Core Data model
+_ENT_CDINGREDIENT = 5
+_ENT_CDMEAL = 6
+_ENT_CDMEALSTEP = 8
+_ENT_CDMEASUREDINGREDIENT = 9
+_ENT_ACHANGE = 16001
+_ENT_ATRANSACTION = 16002
+
+# Process name to check before writing
+_APP_PROCESS_NAME = "Crouton"
 
 # Tables that are valid for PK lookups and Z_MAX updates
 _VALID_TABLES = frozenset({
@@ -70,7 +86,7 @@ def _is_crouton_running() -> bool:
         return False
     try:
         result = subprocess.run(
-            ["pgrep", "-x", "Crouton"],
+            ["pgrep", "-x", _APP_PROCESS_NAME],
             capture_output=True,
             check=False,
         )
@@ -286,16 +302,15 @@ def _create_transaction(conn: sqlite3.Connection) -> int:
     import time
 
     # Core Data timestamps are seconds since 2001-01-01
-    core_data_epoch = 978307200  # Unix timestamp for 2001-01-01
-    timestamp = time.time() - core_data_epoch
+    timestamp = time.time() - _CORE_DATA_EPOCH_OFFSET
 
     next_pk = _get_next_pk(conn, "ATRANSACTION")
     conn.execute(
         """
         INSERT INTO ATRANSACTION (Z_PK, Z_ENT, Z_OPT, ZTIMESTAMP)
-        VALUES (?, 16002, 1, ?)
+        VALUES (?, ?, 1, ?)
         """,
-        (next_pk, timestamp),
+        (next_pk, _ENT_ATRANSACTION, timestamp),
     )
     _update_z_max(conn, "TRANSACTION", next_pk)
     return next_pk
@@ -313,9 +328,9 @@ def _record_change(
     conn.execute(
         """
         INSERT INTO ACHANGE (Z_PK, Z_ENT, Z_OPT, ZCHANGETYPE, ZENTITY, ZENTITYPK, ZTRANSACTIONID)
-        VALUES (?, 16001, 1, ?, ?, ?, ?)
+        VALUES (?, ?, 1, ?, ?, ?, ?)
         """,
-        (next_pk, change_type, entity_type, entity_pk, transaction_id),
+        (next_pk, _ENT_ACHANGE, change_type, entity_type, entity_pk, transaction_id),
     )
     _update_z_max(conn, "CHANGE", next_pk)
 
@@ -332,9 +347,9 @@ def _find_or_create_ingredient(conn: sqlite3.Connection, name: str) -> int:
     conn.execute(
         """
         INSERT INTO ZCDINGREDIENT (Z_PK, Z_ENT, Z_OPT, ZNAME, ZUUID)
-        VALUES (?, 5, 1, ?, ?)
+        VALUES (?, ?, 1, ?, ?)
         """,
-        (pk, name, str(uuid_mod.uuid4()).upper()),
+        (pk, _ENT_CDINGREDIENT, name, str(uuid_mod.uuid4()).upper()),
     )
     _update_z_max(conn, "CDIngredient", pk)
     return pk
@@ -400,11 +415,12 @@ def write_recipe(
                     ZRAWDIFFICULTY, ZISPUBLICRECIPE, ZDELETEDFROMDEVICE, ZUPLOADED,
                     ZDATECREATED, ZDATEMODIFIED, ZRECORDID
                 ) VALUES (
-                    ?, 6, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?
+                    ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?
                 )
                 """,
                 (
                     meal_pk,
+                    _ENT_CDMEAL,
                     recipe.name,
                     recipe_uuid,
                     recipe.servings,
@@ -429,7 +445,7 @@ def write_recipe(
                 ),
             )
             _update_z_max(conn, "CDMeal", meal_pk)
-            _record_change(conn, transaction_id, 6, meal_pk, change_type=0)
+            _record_change(conn, transaction_id, _ENT_CDMEAL, meal_pk, change_type=0)
 
             # Insert steps
             for step in recipe.steps:
@@ -439,13 +455,13 @@ def write_recipe(
                     """
                     INSERT INTO ZCDMEALSTEP
                         (Z_PK, Z_ENT, Z_OPT, ZMEAL, ZORDER, ZSTEP, ZISSECTION, ZUUID)
-                    VALUES (?, 8, 1, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, 1, ?, ?, ?, ?, ?)
                     """,
-                    (step_pk, meal_pk, step.order, step.text,
+                    (step_pk, _ENT_CDMEALSTEP, meal_pk, step.order, step.text,
                      1 if step.is_section else 0, step_uuid),
                 )
                 _update_z_max(conn, "CDMealStep", step_pk)
-                _record_change(conn, transaction_id, 8, step_pk, change_type=0)
+                _record_change(conn, transaction_id, _ENT_CDMEALSTEP, step_pk, change_type=0)
 
             # Insert ingredients
             for ing in recipe.ingredients:
@@ -457,10 +473,11 @@ def write_recipe(
                     INSERT INTO ZCDMEASUREDINGREDIENT (
                         Z_PK, Z_ENT, Z_OPT, ZMEAL, ZINGREDIENT, ZAMOUNT, ZSECONDARYAMOUNT,
                         ZQUANTITYTYPE, ZORDER, ZUUID
-                    ) VALUES (?, 9, 1, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         mi_pk,
+                        _ENT_CDMEASUREDINGREDIENT,
                         meal_pk,
                         ing_pk,
                         ing.amount,
@@ -471,7 +488,9 @@ def write_recipe(
                     ),
                 )
                 _update_z_max(conn, "CDMeasuredIngredient", mi_pk)
-                _record_change(conn, transaction_id, 9, mi_pk, change_type=0)
+                _record_change(
+                    conn, transaction_id, _ENT_CDMEASUREDINGREDIENT, mi_pk, change_type=0
+                )
 
             # Write image files
             if image_data:

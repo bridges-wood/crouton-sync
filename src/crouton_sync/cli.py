@@ -20,6 +20,9 @@ from crouton_sync.markdown import markdown_to_recipe, recipe_to_markdown
 from crouton_sync.sync import compare, print_sync_status
 from crouton_sync.verify import format_result, validate_markdown
 
+# Delay between opening .crumb files to avoid overwhelming the app
+_CRUMB_OPEN_DELAY = 0.5
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
@@ -189,8 +192,11 @@ def _import_via_crumb(args: argparse.Namespace, md_files: list[Path]) -> int:
         count += 1
 
         if args.open_in_app:
-            subprocess.run(["open", "-a", "Crouton", str(crumb_path)], check=False)
-            time.sleep(0.5)  # Brief pause to avoid overwhelming the app
+            if sys.platform == "darwin":
+                subprocess.run(["open", "-a", "Crouton", str(crumb_path)], check=False)
+                time.sleep(_CRUMB_OPEN_DELAY)
+            else:
+                print(f"  Auto-open not supported on {sys.platform}; open manually: {crumb_path}")
 
     prefix = "[DRY RUN] " if dry_run else ""
     print(f"{prefix}Generated {count} .crumb files in {crumb_dir}")

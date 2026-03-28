@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from fractions import Fraction
 
+_FRACTION_TOLERANCE = 0.001
+
 # Crouton internal type → (abbreviation, full name)
 _QUANTITY_MAP: dict[str, tuple[str, str]] = {
     "BOTTLE": ("bottle", "bottle"),
@@ -125,7 +127,7 @@ def format_amount(amount: float | None) -> str:
         frac_str = _FRACTION_MAP.get(round(frac, 4), "")
         if not frac_str:
             for key, symbol in _FRACTION_MAP.items():
-                if abs(frac - key) < 0.001:
+                if abs(frac - key) < _FRACTION_TOLERANCE:
                     frac_str = symbol
                     break
         if not frac_str:

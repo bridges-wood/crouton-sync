@@ -1,4 +1,4 @@
-"""Convert between Recipe models and Obsidian-compatible Markdown."""
+"""Convert between Recipe models and Markdown with YAML frontmatter."""
 
 from __future__ import annotations
 
@@ -11,13 +11,20 @@ import yaml
 from crouton_sync.models import Ingredient, Recipe, Step
 from crouton_sync.quantity import format_amount, parse_amount, to_crouton_type, to_display
 
+# ── Markdown format constants ────────────────────────────────────────────────
+_SECTION_INGREDIENTS = "Ingredients"
+_SECTION_INSTRUCTIONS = "Instructions"
+_SECTION_NOTES = "Notes"
+_YAML_WIDTH = 200
+_MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
+
 
 def recipe_to_markdown(
     recipe: Recipe,
     images_dir: Path | None = None,
     embed_images: bool = True,
 ) -> str:
-    """Convert a Recipe to Obsidian-compatible Markdown with YAML frontmatter."""
+    """Convert a Recipe to Markdown with YAML frontmatter."""
     lines: list[str] = []
 
     # YAML frontmatter
@@ -47,7 +54,7 @@ def recipe_to_markdown(
         meta["nutritional_info"] = recipe.nutritional_info.strip() + "\n"
 
     frontmatter_str = yaml.dump(
-        meta, default_flow_style=False, allow_unicode=True, sort_keys=False, width=200
+        meta, default_flow_style=False, allow_unicode=True, sort_keys=False, width=_YAML_WIDTH
     ).rstrip("\n")
     lines.append("---")
     lines.append(frontmatter_str)
@@ -59,12 +66,11 @@ def recipe_to_markdown(
     lines.append("")
 
     # Image
-    max_image_size = 10 * 1024 * 1024  # 10 MB
     if embed_images and images_dir:
         for img_name in recipe.image_filenames:
             img_path = images_dir / img_name
             if img_path.exists():
-                if img_path.stat().st_size > max_image_size:
+                if img_path.stat().st_size > _MAX_IMAGE_SIZE:
                     import sys
 
                     size_mb = img_path.stat().st_size / (1024 * 1024)
@@ -81,7 +87,7 @@ def recipe_to_markdown(
 
     # Ingredients
     if recipe.ingredients:
-        lines.append("## Ingredients")
+        lines.append(f"## {_SECTION_INGREDIENTS}")
         lines.append("")
         for ing in sorted(recipe.ingredients, key=lambda i: i.order):
             lines.append(f"- {_format_ingredient(ing)}")
@@ -89,7 +95,7 @@ def recipe_to_markdown(
 
     # Instructions
     if recipe.steps:
-        lines.append("## Instructions")
+        lines.append(f"## {_SECTION_INSTRUCTIONS}")
         lines.append("")
         step_num = 1
         for step in sorted(recipe.steps, key=lambda s: s.order):
@@ -103,7 +109,7 @@ def recipe_to_markdown(
 
     # Notes
     if recipe.notes:
-        lines.append("## Notes")
+        lines.append(f"## {_SECTION_NOTES}")
         lines.append("")
         lines.append(recipe.notes.strip())
         lines.append("")
@@ -139,7 +145,7 @@ def markdown_to_recipe(text: str) -> Recipe:
             continue
 
         # Subsection headers (step sections)
-        if stripped.startswith("### ") and current_section == "instructions":
+        if stripped.startswith("### ") and current_section == _SECTION_INSTRUCTIONS.lower():
             section_text = stripped[4:].strip().rstrip(":")
             steps.append(Step(text=section_text, order=len(steps), is_section=True))
             continue
@@ -152,20 +158,20 @@ def markdown_to_recipe(text: str) -> Recipe:
             continue
 
         # Ingredients
-        if current_section == "ingredients" and stripped.startswith("- "):
+        if current_section == _SECTION_INGREDIENTS.lower() and stripped.startswith("- "):
             ing = _parse_ingredient_line(stripped[2:].strip())
             ing.order = len(ingredients)
             ingredients.append(ing)
             continue
 
         # Steps
-        if current_section == "instructions" and re.match(r"\d+\.\s", stripped):
+        if current_section == _SECTION_INSTRUCTIONS.lower() and re.match(r"\d+\.\s", stripped):
             step_text = re.sub(r"^\d+\.\s*", "", stripped)
             steps.append(Step(text=step_text, order=len(steps), is_section=False))
             continue
 
         # Notes
-        if current_section == "notes" and stripped:
+        if current_section == _SECTION_NOTES.lower() and stripped:
             notes = notes + stripped + "\n" if notes else stripped + "\n"
 
     # Build recipe from frontmatter + parsed body

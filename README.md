@@ -20,14 +20,14 @@ uv sync
 ### Export recipes to Markdown
 
 ```bash
-# Export all 215 recipes
+# Export all recipes
 crouton-sync export ~/obsidian-vault/Recipes/
 
 # Export without images (faster, smaller files)
 crouton-sync export ~/obsidian-vault/Recipes/ --no-images
 
-# Export a single recipe
-crouton-sync export ~/obsidian-vault/Recipes/ --recipe "Chicken Piccata"
+# Export a single recipe by name
+crouton-sync export ~/obsidian-vault/Recipes/ --recipe "Oven-Roasted Asparagus"
 ```
 
 ### Import Markdown recipes into Crouton
